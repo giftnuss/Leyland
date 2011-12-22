@@ -2,7 +2,7 @@ package Leyland;
 
 # ABSTRACT: Plack-based framework for RESTful web applications
 
-our $VERSION = "0.001006";
+our $VERSION = "0.002";
 $VERSION = eval $VERSION;
 
 use Moose;
@@ -202,8 +202,6 @@ has 'context_class' => (is => 'ro', isa => 'Str', default => 'Leyland::Context')
 
 has 'name' => (is => 'ro', isa => 'Str', required => 1);
 
-has 'log' => (is => 'ro', does => 'Leyland::Logger', writer => '_set_log');
-
 has 'localizer' => (is => 'ro', isa => 'Leyland::Localizer', predicate => 'has_localizer', writer => '_set_localizer');
 
 has 'views' => (is => 'ro', isa => 'ArrayRef', predicate => 'has_views', writer => '_set_views');
@@ -278,7 +276,7 @@ sub handle {
 	if ($c->method eq 'OPTIONS') {
 		# get all available methods by using Leyland::Negotiator
 		# and return a 204 No Content response
-		$c->log->info('Finding supported methods for requested path.');
+		$c->log->debug('Finding supported methods for requested path.');
 		return $c->_respond(204, { 'Allow' => join(', ', Leyland::Negotiator->find_options($c, $self->routes)) });
 	} else {
 		# negotiate for routes and invoke the first matching route (if any).
@@ -286,11 +284,11 @@ sub handle {
 		# if at any point an expception is raised, handle it.
 		return try {
 			# get routes
-			$c->log->info('Searching matching routes.');
+			$c->log->debug('Searching matching routes.');
 			$c->_set_routes(Leyland::Negotiator->negotiate($c, $self->routes));
 
 			# invoke first route
-			$c->log->info('Invoking first matching route.');
+			$c->log->debug('Invoking first matching route.');
 			my $ret = $c->_invoke_route;
 
 			# are we passing to the next matching route?
@@ -368,32 +366,6 @@ sub BUILD {
 	# load the context class
 	load $self->context_class;
 
-	# init logger
-	if (exists $self->config->{logger}) {
-		# load this logger
-		if (ref $self->config->{logger} eq 'HASH') {
-			my $class = $self->config->{logger}->{class}
-				|| croak "You must provide the name of the logger class to use.";
-			$class = 'Leyland::Logger::'.$class;
-
-			# load the logger class
-			load $class;
-			my $log = $class->new;
-			
-			# initialize the class
-			$log->init($self->config->{logger}->{opts});
-			$self->_set_log($log);
-		} else {
-			my $class = 'Leyland::Logger::'.$self->config->{logger};
-			load $class;
-			$self->_set_log($class->new);
-		}
-	} else {
-		# load the base logger
-		load Leyland::Logger::STDERR;
-		$self->_set_log(Leyland::Logger::STDERR->new);
-	}
-
 	# init localizer, if localization path given
 	$self->_set_localizer(Leyland::Localizer->new(path => $self->config->{locales}))
 		if exists $self->config->{locales};
@@ -451,7 +423,7 @@ sub BUILD {
 					}
 				}
 			}
-		} else {
+		} elsif ($_->routes && $_->routes->Length) {
 			$routes->Push($prefix => $_->routes);
 		}
 	}
@@ -482,7 +454,7 @@ sub _handle_exception {
 
 	# log the error thrown
 	my $err = $exp->error || $Leyland::CODES->{$exp->code}->[0];
-	$c->log->debug('Exception thrown: '.$exp->code.", message: $err");
+	$c->log->info('Exception thrown: '.$exp->code.", message: $err");
 
 	# is this a redirecting exception?
 	if ($exp->code =~ m/^3\d\d$/ && $exp->has_location) {
@@ -543,7 +515,7 @@ table.
 
 =cut
 
-sub _autolog { $_[0]->info($_[1]) }
+sub _autolog { print STDOUT $_[0], "\n" }
 
 =head2 _initial_debug_info()
 
@@ -562,24 +534,23 @@ sub _initial_debug_info {
 	}
 
 	my $t1 = Text::SpanningTable->new(96);
-	$t1->exec(\&_autolog, $self->log);
+	$t1->exec(\&_autolog);
 
 	$t1->hr('top');
 	$t1->row($self->config->{app}.' (powered by Leyland v'.$Leyland::VERSION.')');
 	$t1->dhr;
 	$t1->row('Current working environment: '.$self->cwe);
 	$t1->row('Avilable views: '.join(', ', @views));
-	$t1->row('Logger: '.ref($self->log));
 	
 	$t1->hr('bottom');
 	
-	$self->log->info('Available routes:');
+	my $t2 = Text::SpanningTable->new(16, 24, 13, 18, 18, 12);
+	$t2->exec(\&_autolog);
+	$t2->hr('top');
+	$t2->row([6, 'Available routes:']);
+	$t2->dhr;
 
-	if ($self->has_routes) {
-		my $t2 = Text::SpanningTable->new(16, 24, 13, 18, 18, 12);
-		$t2->exec(\&_autolog, $self->log);
-		
-		$t2->hr('top');
+	if ($self->has_routes && $self->routes->Length) {
 		$t2->row('Prefix', 'Regex', 'Method', 'Accepts', 'Returns', 'Is');
 		$t2->dhr;
 
@@ -598,13 +569,11 @@ sub _initial_debug_info {
 				}
 			}
 		}
-	
-		$t2->hr('bottom');
 	} else {
-		$self->log->info('-- No routes available ! --');
+		$t2->row([6, '-- No routes available!']);
 	}
 
-	$self->log->info(' ');
+	$t2->hr('bottom');
 }
 
 $Leyland::CODES = {
